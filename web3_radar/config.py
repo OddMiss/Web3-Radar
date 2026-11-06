@@ -16,6 +16,7 @@ DEFAULT_STABLECOINS = (
     "USDP",
     "USD1",
     "USDG",
+    "USDGO",
     "RLUSD",
 )
 
@@ -61,6 +62,7 @@ class Settings:
     binance_api_base: str
     binance_web_base: str
     bitget_api_base: str
+    bitget_web_base: str
     bybit_api_base: str
     okx_api_base: str
 
@@ -92,6 +94,7 @@ class Settings:
             binance_api_base=os.getenv("BINANCE_API_BASE", "https://api.binance.com").rstrip("/"),
             binance_web_base=os.getenv("BINANCE_WEB_BASE", "https://www.binance.com").rstrip("/"),
             bitget_api_base=os.getenv("BITGET_API_BASE", "https://api.bitget.com").rstrip("/"),
+            bitget_web_base=os.getenv("BITGET_WEB_BASE", "https://www.bitget.com").rstrip("/"),
             bybit_api_base=os.getenv("BYBIT_API_BASE", "https://api.bybit.com").rstrip("/"),
             okx_api_base=os.getenv("OKX_API_BASE", "https://www.okx.com").rstrip("/"),
         )

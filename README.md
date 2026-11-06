@@ -15,19 +15,20 @@
 |---|---:|---:|---:|---|
 | Binance | 是 | 是 | 阶梯金额与基础利率 | 活期可公开读取；定期需只读 Key |
 | OKX | 是 | 官网可见产品 | Bonus 描述；若官网未给额度则明确不猜测 | 无 |
-| Bitget | 是 | 是 | 完整 `apyList` 阶梯 | 需只读 Key、Secret、Passphrase |
+| Bitget | 是 | 是 | 网页公开 `apyList` 阶梯 | 无；只读 Key 仅作网页故障回退 |
 | Bybit | 是 | 是 | `tierAprDetails`、限定用户、VIP | 无 |
 
 任何一家失败都不会阻断其他三家。错误会入库并出现在 Telegram 对应交易所的消息底部。
 
 ## 不使用 Docker：直接运行 Python 脚本
 
-需要 Python 3.11 或更高版本，不依赖第三方 Python 包。
+需要 Python 3.11 或更高版本。Bitget 网页采集使用 `requests` 处理其 CDN/HTTP 兼容性。
 
 Windows PowerShell：
 
 ```powershell
 Copy-Item .env.example .env
+python -m pip install -r requirements.txt
 ```
 
 Linux：
@@ -35,13 +36,15 @@ Linux：
 ```bash
 cp .env.example .env
 python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 编辑 `.env`：
 
 1. 从 `@BotFather` 创建 Telegram Bot，将 Bot 拉入目标群聊；
 2. 填写 `TELEGRAM_BOT_TOKEN` 和群聊的 `TELEGRAM_CHAT_ID`；
-3. 如需 Binance 定期和 Bitget 完整产品，创建**仅查询/只读** API Key。不要开启交易或提现权限；
+3. 如需 Binance 定期产品，创建**仅查询/只读** API Key。Bitget 默认直接读取公开理财网页，无需 Key；
 4. 可在 `STABLECOINS` 调整监控币种。
 
 先做不发送消息的真实采集：
@@ -72,6 +75,8 @@ python run.py
 cd /opt/Web3-Radar
 cp .env.example .env
 python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 mkdir -p data
 ```
 
@@ -123,14 +128,16 @@ python -m unittest discover -s tests -v  # 运行测试
 - `.env`、`data/` 和数据库不会进入 Git；
 - 交易所 Secret 和 Telegram Token 只从环境变量读取，不写入日志或 SQLite；
 - 监控器只发送 GET 查询，不包含申购、赎回、交易或转账代码；
-- Binance 与 Bitget Key 请绑定服务器出口 IP，并仅授予读取权限；
+- Binance Key 请绑定服务器出口 IP，并仅授予读取权限；若选配 Bitget 回退 Key，也遵循相同原则；
+- Bitget 默认解析公开 `/finance` 页内嵌的结构化产品数据；网页结构变化时会明确报警，并可用只读 API Key 回退；
 - OKX 官网产品接口属于网页接口，可能变更；适配器故障时会明确报警，正式公共市场利率仍独立采集。
 
 ## 官方接口参考
 
 - [Binance Simple Earn](https://developers.binance.com/en/docs/products/simple-earn)
 - [OKX API v5](https://www.okx.com/docs-v5/en/)
-- [Bitget Savings Product List](https://www.bitget.com/legacy-docs/classic/earn/savings/Savings-Products)
+- [Bitget Earn 公共页面](https://www.bitget.com/finance)
+- [Bitget Savings Product List API](https://www.bitget.com/legacy-docs/classic/earn/savings/Savings-Products)
 - [Bybit Earn Product Info](https://bybit-exchange.github.io/docs/v5/finance/earn/easy-onchain/product-info)
 - [Bybit Fixed Saving](https://bybit-exchange.github.io/docs/v5/finance/earn/fixed-saving/product)
 

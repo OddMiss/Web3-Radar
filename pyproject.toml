@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "OddMiss" }]
-dependencies = []
+dependencies = ["requests>=2.31,<3"]
 
 [project.scripts]
 web3-radar = "web3_radar.cli:main"

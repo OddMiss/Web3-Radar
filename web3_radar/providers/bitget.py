@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import time
 import urllib.parse
 from decimal import Decimal
@@ -23,18 +24,51 @@ class BitgetProvider:
         self.http = http
 
     def fetch(self) -> ProviderResult:
-        if not all(
-            (
-                self.settings.bitget_api_key,
-                self.settings.bitget_api_secret,
-                self.settings.bitget_api_passphrase,
-            )
-        ):
+        try:
+            return ProviderResult(self.name, tuple(self._fetch_public_products()))
+        except Exception as endpoint_error:
+            try:
+                html = self.http.get_text(f"{self.settings.bitget_web_base}/finance")
+                offers = tuple(self._parse_webpage(html))
+                return ProviderResult(
+                    self.name,
+                    offers,
+                    f"public JSON endpoint failed; parsed webpage fallback: {endpoint_error}",
+                )
+            except Exception as webpage_error:
+                public_error = f"endpoint: {endpoint_error}; webpage: {webpage_error}"
+            if self._has_api_credentials():
+                api_result = self._fetch_from_api()
+                warning = f"public sources failed; used authenticated API fallback: {public_error}"
+                return ProviderResult(api_result.exchange, api_result.offers, warning)
             return ProviderResult(
                 self.name,
                 (),
-                "BITGET_API_KEY/SECRET/PASSPHRASE not configured; complete tier data requires a read-only key",
+                f"Bitget public product sources failed: {public_error}",
             )
+
+    def _fetch_public_products(self) -> list[EarnOffer]:
+        payload = self.http.post_json(
+            (
+                f"{self.settings.bitget_web_base}/v1/finance/polymerization/"
+                "product/entire/list/v3"
+            ),
+            data={
+                "secondBizLineList": [],
+                "guaranteed": True,
+                "webReq": True,
+                "languageType": 0,
+            },
+            headers={
+                "Origin": self.settings.bitget_web_base,
+                "Referer": f"{self.settings.bitget_web_base}/finance",
+            },
+        )
+        if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), list):
+            raise RuntimeError(payload.get("msg") or "unexpected Bitget webpage API response")
+        return self._parse_list_data(payload["data"])
+
+    def _fetch_from_api(self) -> ProviderResult:
         offers: list[EarnOffer] = []
         errors: list[str] = []
         for asset in self.settings.stablecoins:
@@ -43,6 +77,100 @@ class BitgetProvider:
             except Exception as exc:
                 errors.append(f"{asset}: {exc}")
         return ProviderResult(self.name, tuple(offers), "; ".join(errors))
+
+    def _parse_webpage(self, html: str) -> list[EarnOffer]:
+        marker = "window.__ZEUS_REACT_QUERY_STATE__ = "
+        start = html.find(marker)
+        if start < 0:
+            raise RuntimeError("embedded product state not found")
+        start += len(marker)
+        end = html.find("</script>", start)
+        if end < 0:
+            raise RuntimeError("embedded product state is incomplete")
+        raw_state = html[start:end].strip().removesuffix(";")
+        state = json.loads(raw_state)
+        page_data: dict[str, Any] | None = None
+        for query in state.get("queries") or []:
+            query_key = query.get("queryKey") or []
+            if query_key and query_key[0] == "earning-overview-prefetch":
+                page_data = (query.get("state") or {}).get("data")
+                break
+        if not page_data or not isinstance(page_data.get("listData"), list):
+            raise RuntimeError("Bitget product listData not found")
+
+        return self._parse_list_data(page_data["listData"])
+
+    def _parse_list_data(self, list_data: list[dict[str, Any]]) -> list[EarnOffer]:
+        allowed_assets = set(self.settings.stablecoins)
+        offers: list[EarnOffer] = []
+        seen: set[str] = set()
+        for coin in list_data:
+            asset = str(coin.get("coinName") or "").upper()
+            if asset not in allowed_assets:
+                continue
+            for group in coin.get("bizLineProductList") or []:
+                business_line = str(group.get("secondBizLine") or "")
+                if business_line not in {"Savings", "CashPlus"}:
+                    continue
+                for item in group.get("productList") or []:
+                    product_id = str(item.get("id") or item.get("productId") or "")
+                    if not product_id or product_id in seen or item.get("visibleApy") is False:
+                        continue
+                    seen.add(product_id)
+                    offers.append(self._parse_web_product(asset, business_line, group, item))
+        return offers
+
+    def _parse_web_product(
+        self,
+        asset: str,
+        business_line: str,
+        group: dict[str, Any],
+        item: dict[str, Any],
+    ) -> EarnOffer:
+        tier_rows = item.get("apyList") or []
+        high_first_tier = (
+            len(tier_rows) > 1
+            and percent_text(tier_rows[0].get("apy"))
+            > percent_text(tier_rows[-1].get("apy"))
+        )
+        tiers = tuple(
+            RateTier(
+                min_amount=decimal(tier.get("minStepValue")),
+                max_amount=self._optional_decimal(tier.get("maxStepValue")),
+                apr_percent=percent_text(tier.get("apy")),
+                is_bonus=index == 0 and high_first_tier,
+                note="首档高息" if index == 0 and high_first_tier else "",
+            )
+            for index, tier in enumerate(tier_rows)
+        )
+        apr = max(
+            (tier.apr_percent for tier in tiers),
+            default=percent_text(item.get("maxApy") or item.get("apr")),
+        )
+        level = int(item.get("productLevel") or group.get("productLevel") or 1)
+        product_type = "flexible" if int(item.get("periodType") or 1) == 1 else "fixed"
+        if business_line == "CashPlus":
+            product_name = "Cash Plus"
+        elif level > 1:
+            product_name = "VIP Simple Earn"
+        else:
+            product_name = "Simple Earn"
+        return EarnOffer(
+            exchange=self.name,
+            asset=asset,
+            product_type=product_type,
+            product_name=product_name,
+            apr_percent=apr,
+            status=self._web_status(item.get("status")),
+            duration_days=(
+                duration_to_days(item.get("period")) if product_type == "fixed" else None
+            ),
+            is_bonus=high_first_tier,
+            eligibility="VIP" if level > 1 else "",
+            tiers=tiers,
+            source="Bitget public Earn webpage",
+            product_id=str(item.get("id") or item.get("productId") or ""),
+        )
 
     def _fetch_asset(self, asset: str) -> list[EarnOffer]:
         params = {"coin": asset, "filter": "available_and_held"}
@@ -102,6 +230,25 @@ class BitgetProvider:
         return self.http.get_json(
             f"{self.settings.bitget_api_base}{self.path}?{query}", headers=headers
         )
+
+    def _has_api_credentials(self) -> bool:
+        return all(
+            (
+                self.settings.bitget_api_key,
+                self.settings.bitget_api_secret,
+                self.settings.bitget_api_passphrase,
+            )
+        )
+
+    @staticmethod
+    def _web_status(value: Any) -> str:
+        if str(value) == "2":
+            return "available"
+        if str(value) in {"3", "4", "6"}:
+            return "sold_out"
+        if str(value) == "1":
+            return "not_started"
+        return str(value or "unknown")
 
     @staticmethod
     def _optional_decimal(value: Any) -> Decimal | None:

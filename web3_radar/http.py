@@ -7,6 +7,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+import requests
+
 
 class HttpError(RuntimeError):
     pass
@@ -29,6 +31,46 @@ class HttpClient:
             url = f"{url}{'&' if '?' in url else '?'}{query}"
         return self._request_json("GET", url, headers=headers)
 
+    def get_text(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        request_headers = {
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "Mozilla/5.0 (compatible; Web3-Radar/0.1)",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        if headers:
+            request_headers.update(headers)
+        last_error: Exception | None = None
+        for attempt in range(self.retries + 1):
+            response: requests.Response | None = None
+            try:
+                response = requests.get(
+                    url,
+                    headers=request_headers,
+                    timeout=self.timeout,
+                    allow_redirects=True,
+                )
+                if response.status_code >= 400:
+                    detail = response.text[:500]
+                    raise HttpError(
+                        f"HTTP {response.status_code} from {self._safe_url(url)}: {detail}"
+                    )
+                return response.text
+            except HttpError as exc:
+                last_error = exc
+                status = response.status_code if response is not None else 0
+                if status < 500 and status != 429:
+                    break
+            except requests.RequestException as exc:
+                last_error = exc
+            if attempt < self.retries:
+                time.sleep(1.5 * (2**attempt))
+        raise HttpError(str(last_error or f"request failed: {self._safe_url(url)}"))
+
     def post_form_json(
         self,
         url: str,
@@ -41,6 +83,51 @@ class HttpClient:
         if headers:
             merged.update(headers)
         return self._request_json("POST", url, body=body, headers=merged)
+
+    def post_json(
+        self,
+        url: str,
+        *,
+        data: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        request_headers = {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; Web3-Radar/0.1)",
+            "Content-Type": "application/json",
+        }
+        if headers:
+            request_headers.update(headers)
+        last_error: Exception | None = None
+        for attempt in range(self.retries + 1):
+            response: requests.Response | None = None
+            try:
+                response = requests.post(
+                    url,
+                    json=data,
+                    headers=request_headers,
+                    timeout=self.timeout,
+                    allow_redirects=True,
+                )
+                if response.status_code >= 400:
+                    raise HttpError(
+                        f"HTTP {response.status_code} from {self._safe_url(url)}: "
+                        f"{response.text[:500]}"
+                    )
+                parsed = response.json()
+                if not isinstance(parsed, dict):
+                    raise HttpError(f"expected JSON object from {self._safe_url(url)}")
+                return parsed
+            except HttpError as exc:
+                last_error = exc
+                status = response.status_code if response is not None else 0
+                if status < 500 and status != 429:
+                    break
+            except (requests.RequestException, requests.exceptions.JSONDecodeError) as exc:
+                last_error = exc
+            if attempt < self.retries:
+                time.sleep(1.5 * (2**attempt))
+        raise HttpError(str(last_error or f"request failed: {self._safe_url(url)}"))
 
     def _request_json(
         self,
