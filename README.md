@@ -20,12 +20,21 @@
 
 任何一家失败都不会阻断其他三家。错误会入库并出现在 Telegram 对应交易所的消息底部。
 
-## 本地首次运行
+## 不使用 Docker：直接运行 Python 脚本
 
 需要 Python 3.11 或更高版本，不依赖第三方 Python 包。
 
+Windows PowerShell：
+
 ```powershell
 Copy-Item .env.example .env
+```
+
+Linux：
+
+```bash
+cp .env.example .env
+python3 -m venv .venv
 ```
 
 编辑 `.env`：
@@ -38,19 +47,54 @@ Copy-Item .env.example .env
 先做不发送消息的真实采集：
 
 ```powershell
-python -m web3_radar run --once --dry-run
+python run.py --once --dry-run
 ```
 
 确认输出后发送一次：
 
 ```powershell
-python -m web3_radar run --once
+python run.py --once
 ```
 
-常驻运行：
+前台常驻运行（启动后立即采集，之后默认每小时一次）：
 
 ```powershell
-python -m web3_radar run
+python run.py
+```
+
+`run.py` 会自动把工作目录切换到项目根目录，因此从其他目录调用它时仍会正确读取项目中的 `.env`，并将数据库写入项目的 `data/`。
+
+### Linux systemd 开机自启
+
+仓库提供了 [systemd 服务模板](deploy/systemd/web3-radar.service.example)。假设项目放在 `/opt/Web3-Radar`：
+
+```bash
+cd /opt/Web3-Radar
+cp .env.example .env
+python3 -m venv .venv
+mkdir -p data
+```
+
+填写 `.env` 后，复制服务模板并把其中的 `User=CHANGE_ME` 改为实际运行用户。如果项目不在 `/opt/Web3-Radar`，同时替换模板内的三处路径。
+
+```bash
+sudo cp deploy/systemd/web3-radar.service.example /etc/systemd/system/web3-radar.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now web3-radar
+sudo systemctl status web3-radar
+```
+
+查看实时日志：
+
+```bash
+journalctl -u web3-radar -f
+```
+
+更新代码后重启：
+
+```bash
+git pull
+sudo systemctl restart web3-radar
 ```
 
 ## Docker 服务器部署
@@ -67,10 +111,10 @@ docker compose logs -f radar
 ## 命令
 
 ```text
-python -m web3_radar run                 # 每小时运行并发送
-python -m web3_radar run --once          # 发送一次后退出
-python -m web3_radar run --once --dry-run # 采集、入库、打印，不发 Telegram
-python -m web3_radar healthcheck         # 检查最近运行状态
+python run.py                             # 每小时运行并发送
+python run.py --once                      # 发送一次后退出
+python run.py --once --dry-run            # 采集、入库、打印，不发 Telegram
+python run.py healthcheck                 # 检查最近运行状态
 python -m unittest discover -s tests -v  # 运行测试
 ```
 

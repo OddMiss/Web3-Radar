@@ -1,0 +1,19 @@
+[Unit]
+Description=Web3 Radar stablecoin earn-rate monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=CHANGE_ME
+WorkingDirectory=/opt/Web3-Radar
+EnvironmentFile=/opt/Web3-Radar/.env
+ExecStart=/opt/Web3-Radar/.venv/bin/python /opt/Web3-Radar/run.py
+Restart=always
+RestartSec=15
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
