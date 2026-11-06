@@ -1,0 +1,13 @@
+services:
+  radar:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "web3-radar", "healthcheck"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 2m
